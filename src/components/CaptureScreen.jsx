@@ -230,8 +230,9 @@ export default function CaptureScreen({ onCapture }) {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: facing },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width:  { ideal: 1920 },
+          height: { ideal: 1440 },  // 4:3 센서 원본 비율
+          aspectRatio: { ideal: 4 / 3 },
         },
         audio: false,
       });
@@ -261,27 +262,29 @@ export default function CaptureScreen({ onCapture }) {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
 
-    // ── 기존 가로 강제 크롭 로직 (절대 건드리지 않음) ──
-    const TARGET_RATIO = 16 / 9;
+    // ── 4:3 크롭 로직 ──
+    const TARGET_RATIO = 4 / 3;
     let srcX = 0, srcY = 0, srcW = vw, srcH = vh;
-    if (vh > vw) {
-      srcW = vw;
-      srcH = Math.round(vw / TARGET_RATIO);
-      srcY = Math.round((vh - srcH) / 2);
-    } else if (vw / vh > TARGET_RATIO + 0.01) {
+    if (vw / vh > TARGET_RATIO + 0.01) {
+      // 센서가 더 가로로 넓은 경우 → 좌우 크롭
       srcH = vh;
       srcW = Math.round(vh * TARGET_RATIO);
       srcX = Math.round((vw - srcW) / 2);
+    } else if (vh / vw > (1 / TARGET_RATIO) + 0.01) {
+      // 센서가 더 세로로 긴 경우 → 상하 크롭
+      srcW = vw;
+      srcH = Math.round(vw / TARGET_RATIO);
+      srcY = Math.round((vh - srcH) / 2);
     }
     if (srcW <= 0 || srcH <= 0) { srcX = 0; srcY = 0; srcW = vw; srcH = vh; }
     const OUT_W = 1920;
-    const OUT_H = 1080;
+    const OUT_H = 1440;  // 4:3
     const canvas = document.createElement("canvas");
     canvas.width = OUT_W;
     canvas.height = OUT_H;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, OUT_W, OUT_H);
-    // ── 기존 크롭 로직 끝 ──
+    // ── 4:3 크롭 로직 끝 ──
 
     // [신규 용접] 워터마크 각인 — 크롭 직후 캔버스 위에 덮어쓰기
     stampWatermark(ctx, OUT_W, OUT_H, locationTextRef.current);
@@ -377,30 +380,53 @@ export default function CaptureScreen({ onCapture }) {
           </div>
         )}
 
-        {/* 가로 크롭 가이드라인 (기존 보존) */}
-        {ready && (
-          <div
-            className="absolute inset-x-0 pointer-events-none"
-            style={{
-              top: "calc(50% - (100vw / 16 * 9) / 2)",
-              height: "calc(100vw / 16 * 9)",
-              border: "2px solid #FEE12B",
-              boxSizing: "border-box",
-            }}
-          >
-            <span className="absolute top-1 left-2 text-xs font-black" style={{ color: "#FEE12B", textShadow: "0 1px 3px #000", letterSpacing: "0.05em" }}>
-              가로 촬영 범위 16:9
-            </span>
-          </div>
-        )}
-
-        {/* 뷰파인더 코너 마킹 (기존 보존) */}
+        {/* ━━━ 4:3 크롭 가이드라인 오버레이 ━━━ */}
         {ready && (
           <>
-            <div className="absolute top-12 left-6 w-8 h-8 border-t-2 border-l-2" style={{ borderColor: "#FEE12B" }} />
-            <div className="absolute top-12 right-6 w-8 h-8 border-t-2 border-r-2" style={{ borderColor: "#FEE12B" }} />
-            <div className="absolute bottom-28 left-6 w-8 h-8 border-b-2 border-l-2" style={{ borderColor: "#FEE12B" }} />
-            <div className="absolute bottom-28 right-6 w-8 h-8 border-b-2 border-r-2" style={{ borderColor: "#FEE12B" }} />
+            {/* 가이드 박스 바깥 — 위/아래 어둠 마스크 */}
+            <div
+              className="absolute inset-x-0 top-0 pointer-events-none"
+              style={{
+                height: "calc((100% - 100vw / 4 * 3) / 2)",
+                background: "rgba(0,0,0,0.38)",
+              }}
+            />
+            <div
+              className="absolute inset-x-0 bottom-0 pointer-events-none"
+              style={{
+                height: "calc((100% - 100vw / 4 * 3) / 2)",
+                background: "rgba(0,0,0,0.38)",
+              }}
+            />
+
+            {/* 노란 테두리 가이드 박스 */}
+            <div
+              className="absolute inset-x-0 pointer-events-none"
+              style={{
+                top: "calc((100% - 100vw / 4 * 3) / 2)",
+                height: "calc(100vw / 4 * 3)",
+                border: "2.5px solid #FEE12B",
+                boxSizing: "border-box",
+                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.5)",
+              }}
+            >
+              <span
+                className="absolute top-2 left-3 text-xs font-black"
+                style={{ color: "#FEE12B", textShadow: "0 1px 4px #000", letterSpacing: "0.06em" }}
+              >
+                ✦ 촬영 범위 4:3
+              </span>
+            </div>
+
+            {/* 4:3 박스 꼭짓점 코너 마킹 */}
+            <div className="absolute left-3 w-7 h-7 border-t-[3px] border-l-[3px] pointer-events-none"
+              style={{ top: "calc((100% - 100vw / 4 * 3) / 2 + 0px)", borderColor: "#FEE12B" }} />
+            <div className="absolute right-3 w-7 h-7 border-t-[3px] border-r-[3px] pointer-events-none"
+              style={{ top: "calc((100% - 100vw / 4 * 3) / 2 + 0px)", borderColor: "#FEE12B" }} />
+            <div className="absolute left-3 w-7 h-7 border-b-[3px] border-l-[3px] pointer-events-none"
+              style={{ bottom: "calc((100% - 100vw / 4 * 3) / 2 + 0px)", borderColor: "#FEE12B" }} />
+            <div className="absolute right-3 w-7 h-7 border-b-[3px] border-r-[3px] pointer-events-none"
+              style={{ bottom: "calc((100% - 100vw / 4 * 3) / 2 + 0px)", borderColor: "#FEE12B" }} />
           </>
         )}
       </div>

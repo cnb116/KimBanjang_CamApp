@@ -1,13 +1,30 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 
+// ——— 점멸 애니메이션 CSS (전역 style 주입) ———
+const MIC_BLINK_STYLE = `
+@keyframes micBlink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255,59,59,0.7); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 10px rgba(255,59,59,0); }
+}
+.mic-blinking {
+  animation: micBlink 0.9s ease-in-out infinite;
+}
+`;
+if (typeof document !== "undefined" && !document.getElementById("mic-blink-style")) {
+  const el = document.createElement("style");
+  el.id = "mic-blink-style";
+  el.textContent = MIC_BLINK_STYLE;
+  document.head.appendChild(el);
+}
+
 // ——— 아이콘 SVG ———
-function MicIcon({ isRecording }) {
+function MicIcon({ isRecording, size = 34 }) {
   return (
-    <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke={isRecording ? "#000" : "#000"} strokeWidth="2" strokeLinecap="round">
-      <rect x="9" y="2" width="6" height="12" rx="3" fill={isRecording ? "#FF3B3B" : "#000"} stroke="none" />
-      <path d="M5 10a7 7 0 0 0 14 0" />
-      <line x1="12" y1="17" x2="12" y2="21" />
-      <line x1="8" y1="21" x2="16" y2="21" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" strokeWidth="2" strokeLinecap="round">
+      <rect x="9" y="2" width="6" height="12" rx="3" fill={isRecording ? "#fff" : "#000"} stroke="none" />
+      <path d="M5 10a7 7 0 0 0 14 0" stroke={isRecording ? "#fff" : "#000"} />
+      <line x1="12" y1="17" x2="12" y2="21" stroke={isRecording ? "#fff" : "#000"} />
+      <line x1="8" y1="21" x2="16" y2="21" stroke={isRecording ? "#fff" : "#000"} />
     </svg>
   );
 }
@@ -46,31 +63,34 @@ function useSpeechRecognition() {
   const recognitionRef = useRef(null);
   const [transcript, setTranscript] = useState("");
   const [isRecording, setIsRecording] = useState(false);
+  // 브라우저 지원 여부 (렌더 전 체크)
+  const isSpeechSupported =
+    typeof window !== "undefined" &&
+    !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
   const startRecording = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
-      alert("이 브라우저는 음성 인식을 지원하지 않습니더. Chrome을 사용하이소.");
+      alert("지원하지 않는 브라우저입니다. Chrome 또는 Safari를 사용해 주세요.");
       return;
     }
     const recognition = new SR();
     recognition.lang = "ko-KR";
-    recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.continuous = false;   // 한 발화 끝나면 onend 발생
+    recognition.interimResults = false;
 
     recognition.onresult = (event) => {
-      let final = "";
+      // 최종 결과만 수집하여 기존 텍스트 뒤에 띄어쓰기와 함께 추가
+      let finalText = "";
       for (let i = 0; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
-          final += event.results[i][0].transcript + " ";
+          finalText += event.results[i][0].transcript;
         }
       }
-      if (final.trim()) {
+      if (finalText.trim()) {
         setTranscript((prev) => {
-          // 중복 방지
-          const newText = final.trim();
-          if (prev.trim().endsWith(newText)) return prev;
-          return (prev + " " + newText).trim();
+          const trimmed = prev.trim();
+          return trimmed ? trimmed + " " + finalText.trim() : finalText.trim();
         });
       }
     };
@@ -81,6 +101,7 @@ function useSpeechRecognition() {
     };
 
     recognition.onend = () => {
+      // 인식 종료 시 항상 점멸 해제
       setIsRecording(false);
     };
 
@@ -96,7 +117,15 @@ function useSpeechRecognition() {
 
   const clearTranscript = useCallback(() => setTranscript(""), []);
 
-  return { transcript, setTranscript, isRecording, startRecording, stopRecording, clearTranscript };
+  return {
+    transcript,
+    setTranscript,
+    isRecording,
+    isSpeechSupported,
+    startRecording,
+    stopRecording,
+    clearTranscript,
+  };
 }
 
 // ——— 캔버스 드로잉 훅 ———
@@ -214,15 +243,61 @@ function useCanvasDrawing(imageDataUrl, canvasRef) {
 // ——— 메인 EditScreen ———
 export default function EditScreen({ imageDataUrl, onRetake, onSend, isSending, sendResult }) {
   const canvasRef = useRef(null);
-  const { transcript, setTranscript, isRecording, startRecording, stopRecording, clearTranscript } =
-    useSpeechRecognition();
+  const {
+    transcript,
+    setTranscript,
+    isRecording,
+    isSpeechSupported,
+    startRecording,
+    stopRecording,
+    clearTranscript,
+  } = useSpeechRecognition();
   const { handleTouchStart, handleTouchMove, handleTouchEnd, undo, clearAll } =
     useCanvasDrawing(imageDataUrl, canvasRef);
 
   const handleSend = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const compositeImageDataUrl = canvas.toDataURL("image/jpeg", 0.92);
+
+    // ── 오프스크린 캔버스로 워터마크 합성 (원본 드로잉 캔버스 보존) ──
+    const off = document.createElement("canvas");
+    off.width  = canvas.width;
+    off.height = canvas.height;
+    const ctx = off.getContext("2d");
+
+    // 1) 드로잉 캔버스 내용 복사
+    ctx.drawImage(canvas, 0, 0);
+
+    // 2) 날짜/시간 문자열 생성
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const dateStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+    // 3) 텍스트 유무 판별 후 워터마크 문자열 결정
+    const hasText = transcript.trim() !== "";
+    const watermarkText = hasText
+      ? `${dateStr}  |  ${transcript.trim()}`
+      : dateStr;
+
+    // 4) 폰트 크기는 캔버스 너비 기준 동적 산정 (최소 24px)
+    const fontSize = Math.max(Math.round(canvas.width * 0.032), 24);
+    ctx.font = `bold ${fontSize}px 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
+    ctx.textBaseline = "middle";
+
+    // 5) 배경 박스 — 항상 캔버스 전체 너비 (가독성 최우선)
+    const padX = Math.round(canvas.width * 0.025);
+    const padY = Math.round(fontSize * 0.55);
+    const boxH = fontSize + padY * 2;
+    const boxY = canvas.height - boxH;
+
+    ctx.fillStyle = "rgba(254, 225, 43, 0.75)";
+    ctx.fillRect(0, boxY, canvas.width, boxH);
+
+    // 6) 텍스트 출력 (왼쪽 정렬)
+    ctx.fillStyle = "rgba(0, 0, 0, 0.92)";
+    ctx.fillText(watermarkText, padX, boxY + boxH / 2);
+
+    const compositeImageDataUrl = off.toDataURL("image/jpeg", 0.92);
     onSend({ compositeImageDataUrl, transcript });
   }, [onSend, transcript]);
 
@@ -306,7 +381,7 @@ export default function EditScreen({ imageDataUrl, onRetake, onSend, isSending, 
         </div>
       </div>
 
-      {/* STT 텍스트 — 수정 가능한 textarea (하자 보수 완료) */}
+      {/* STT 텍스트 — 수정 가능한 textarea */}
       <div
         style={{ background: "rgba(0,0,0,0.92)", borderTop: "2px solid rgba(254,225,43,0.35)" }}
       >
@@ -314,7 +389,7 @@ export default function EditScreen({ imageDataUrl, onRetake, onSend, isSending, 
         <div className="flex items-center justify-between px-4 pt-2 pb-1">
           <div className="flex items-center gap-2">
             {isRecording && (
-              <span className="text-red-400 text-base animate-pulse">●</span>
+              <span style={{ color: "#FF3B3B", fontSize: 16, animation: "micBlink 0.9s ease-in-out infinite" }}>●</span>
             )}
             <span
               className="text-xs font-black tracking-wider"
@@ -340,34 +415,67 @@ export default function EditScreen({ imageDataUrl, onRetake, onSend, isSending, 
           )}
         </div>
 
-        {/* ★ 핵심 하자 보수: <p> → <textarea> 수정 가능한 텍스트박스 ★ */}
-        <textarea
-          value={transcript}
-          onChange={(e) => setTranscript(e.target.value)}
-          placeholder={isRecording ? "" : "마이크 버튼을 눌러 음성 메모를 추가하거나\n여기를 직접 터치해서 입력하이소"}
-          rows={3}
-          style={{
-            display: "block",
-            width: "100%",
-            background: "rgba(255,255,255,0.06)",
-            color: "#FFFFFF",
-            fontSize: 20,           // 현장 어르신 기준 큰 폰트
-            fontWeight: 700,
-            lineHeight: 1.55,
-            padding: "10px 16px 14px",
-            border: "none",
-            outline: "none",
-            resize: "none",
-            fontFamily: "inherit",
-            caretColor: "#FEE12B",
-            // 장갑 벗고 수정할 때 선택 허용
-            userSelect: "text",
-            WebkitUserSelect: "text",
-          }}
-          // textarea 터치 시 canvas 드로잉 이벤트와 충돌하지 않도록
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-        />
+        {/* textarea + 우측 하단 마이크 버튼 (relative wrapper) */}
+        <div style={{ position: "relative" }}>
+          <textarea
+            value={transcript}
+            onChange={(e) => setTranscript(e.target.value)}
+            placeholder={isRecording ? "" : "마이크 버튼을 눌러 음성 메모를 추가하거나\n여기를 직접 터치해서 입력하이소"}
+            rows={3}
+            style={{
+              display: "block",
+              width: "100%",
+              background: "rgba(255,255,255,0.06)",
+              color: "#FFFFFF",
+              fontSize: 20,
+              fontWeight: 700,
+              lineHeight: 1.55,
+              // 우측 하단 마이크 버튼 자리를 위해 paddingRight 확보
+              padding: "10px 60px 14px 16px",
+              border: "none",
+              outline: "none",
+              resize: "none",
+              fontFamily: "inherit",
+              caretColor: "#FEE12B",
+              boxSizing: "border-box",
+              userSelect: "text",
+              WebkitUserSelect: "text",
+            }}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+          />
+
+          {/* ★ 텍스트 영역 우측 하단 마이크 버튼 ★ */}
+          {isSpeechSupported && (
+            <button
+              onTouchStart={(e) => { e.stopPropagation(); handleMicPress(); }}
+              onClick={handleMicPress}
+              aria-label={isRecording ? "녹음 중지" : "음성 입력 시작"}
+              className={isRecording ? "mic-blinking" : ""}
+              style={{
+                position: "absolute",
+                right: 10,
+                bottom: 10,
+                width: 42,
+                height: 42,
+                borderRadius: "50%",
+                border: "none",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: isRecording ? "#FF3B3B" : "rgba(254,225,43,0.90)",
+                boxShadow: isRecording
+                  ? "0 0 0 3px rgba(255,59,59,0.4)"
+                  : "0 2px 8px rgba(0,0,0,0.4)",
+                touchAction: "manipulation",
+                transition: "background 0.2s",
+              }}
+            >
+              <MicIcon isRecording={isRecording} size={22} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 전송 결과 메시지 */}
@@ -388,25 +496,32 @@ export default function EditScreen({ imageDataUrl, onRetake, onSend, isSending, 
         className="flex items-center justify-around px-4 pb-8 pt-3 gap-4"
         style={{ background: "rgba(0,0,0,0.9)", minHeight: 110 }}
       >
-        {/* 마이크 버튼 — press to toggle */}
-        <button
-          onTouchStart={handleMicPress}
-          onClick={handleMicPress}
-          className="flex flex-col items-center justify-center rounded-2xl transition-transform active:scale-95"
-          style={{
-            width: 100,
-            height: 80,
-            background: isRecording ? "#FF3B3B" : "#FEE12B",
-            touchAction: "manipulation",
-            gap: 4,
-          }}
-          aria-label={isRecording ? "녹음 중지" : "음성 메모 시작"}
-        >
-          <MicIcon isRecording={isRecording} />
-          <span className="text-xs font-black" style={{ color: "#000" }}>
-            {isRecording ? "중지" : "음성메모"}
-          </span>
-        </button>
+        {/* 마이크 버튼 — press to toggle (미지원 브라우저 시 숨김) */}
+        {isSpeechSupported && (
+          <button
+            onTouchStart={handleMicPress}
+            onClick={handleMicPress}
+            className={[
+              "flex flex-col items-center justify-center rounded-2xl transition-transform active:scale-95",
+              isRecording ? "mic-blinking" : "",
+            ].join(" ")}
+            style={{
+              width: 100,
+              height: 80,
+              background: isRecording ? "#FF3B3B" : "#FEE12B",
+              touchAction: "manipulation",
+              gap: 4,
+              border: "none",
+              cursor: "pointer",
+            }}
+            aria-label={isRecording ? "녹음 중지" : "음성 메모 시작"}
+          >
+            <MicIcon isRecording={isRecording} />
+            <span className="text-xs font-black" style={{ color: isRecording ? "#fff" : "#000" }}>
+              {isRecording ? "중지" : "음성메모"}
+            </span>
+          </button>
+        )}
 
         {/* 전송 버튼 */}
         <button
