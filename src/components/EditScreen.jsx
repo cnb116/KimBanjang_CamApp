@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 
-// ━━━ 점멸 애니메이션 CSS 전역 주입 ━━━
+// ━━━ 점멸 애니메이션 CSS ━━━
 if (typeof document !== "undefined" && !document.getElementById("mic-blink-style")) {
   const el = document.createElement("style");
   el.id = "mic-blink-style";
@@ -14,6 +14,9 @@ if (typeof document !== "undefined" && !document.getElementById("mic-blink-style
   document.head.appendChild(el);
 }
 
+// 브러시 설정
+const BRUSH_COLOR = "#FF0000";
+
 // ━━━ 아이콘 SVG ━━━
 function MicIcon({ recording, size = 24 }) {
   const c = recording ? "#fff" : "#000";
@@ -23,25 +26,6 @@ function MicIcon({ recording, size = 24 }) {
       <path d="M5 10a7 7 0 0 0 14 0" stroke={c} />
       <line x1="12" y1="17" x2="12" y2="21" stroke={c} />
       <line x1="8"  y1="21" x2="16" y2="21" stroke={c} />
-    </svg>
-  );
-}
-
-function UndoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#FEE12B" strokeWidth="2" strokeLinecap="round">
-      <path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#FF5555" strokeWidth="2" strokeLinecap="round">
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-      <path d="M10 11v6" /><path d="M14 11v6" />
-      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
     </svg>
   );
 }
@@ -73,24 +57,19 @@ function buildComposite(srcCanvas, text) {
   off.height = srcCanvas.height;
   const ctx = off.getContext("2d");
 
-  // 원본 드로잉 내용 복사
   ctx.drawImage(srcCanvas, 0, 0);
 
-  // 날짜 생성
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  // 최종 라벨
   const hasText = text.trim() !== "";
   const label = hasText ? `${dateStr}  |  ${text.trim()}` : dateStr;
 
-  // 폰트 설정
   const fontSize = Math.max(Math.round(off.width * 0.030), 28);
   ctx.font = `bold ${fontSize}px 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
   ctx.textBaseline = "middle";
 
-  // 배경: 하단 전체 너비 100%
   const padY = Math.round(fontSize * 0.6);
   const boxH = fontSize + padY * 2;
   const boxY = off.height - boxH;
@@ -98,7 +77,6 @@ function buildComposite(srcCanvas, text) {
   ctx.fillStyle = "rgba(254, 225, 43, 0.85)";
   ctx.fillRect(0, boxY, off.width, boxH);
 
-  // 텍스트 출력
   const padX = Math.round(off.width * 0.022);
   ctx.fillStyle = "rgba(0, 0, 0, 0.95)";
   ctx.fillText(label, padX, boxY + boxH / 2);
@@ -126,22 +104,17 @@ function useSpeechRecognition() {
       setIsRecording(false);
       return;
     }
-
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return alert("지원하지 않는 브라우저입니다.");
-
     const rec = new SR();
     rec.lang = "ko-KR";
     rec.continuous = false;
     rec.onresult = (event) => {
       const result = event.results[0][0].transcript;
-      if (result) {
-        setTranscript(prev => prev.trim() ? prev.trim() + " " + result.trim() : result.trim());
-      }
+      if (result) setTranscript(prev => prev.trim() ? prev.trim() + " " + result.trim() : result.trim());
     };
     rec.onerror = () => setIsRecording(false);
     rec.onend = () => setIsRecording(false);
-
     recognitionRef.current = rec;
     rec.start();
     setIsRecording(true);
@@ -150,12 +123,23 @@ function useSpeechRecognition() {
   return { transcript, setTranscript, isRecording, isSpeechSupported, toggleRecording };
 }
 
-// ━━━ 드로잉 훅 ━━━
-function useCanvasDrawing(imageDataUrl, canvasRef) {
-  const isDrawing = useRef(false);
-  const strokesRef = useRef([]);
-  const currentRef = useRef([]);
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 메인 EditScreen
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+export default function EditScreen({ imageDataUrl, onBack }) {
+  const canvasRef = useRef(null);
+  const [statusMsg, setStatusMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
 
+  // 드로잉 관련 상태
+  const isDrawing = useRef(false);
+  const lastPos = useRef(null);
+  const strokesRef = useRef([]); // 스트로크 히스토리
+  const currentStroke = useRef([]);
+
+  const { transcript, setTranscript, isRecording, isSpeechSupported, toggleRecording } = useSpeechRecognition();
+
+  // 초기 이미지 로드
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !imageDataUrl) return;
@@ -167,95 +151,117 @@ function useCanvasDrawing(imageDataUrl, canvasRef) {
       ctx.drawImage(img, 0, 0);
     };
     img.src = imageDataUrl;
-  }, [imageDataUrl, canvasRef]);
+  }, [imageDataUrl]);
 
-  const redraw = useCallback(() => {
+  // 좌표 계산
+  const getPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (touch.clientX - rect.left) * scaleX,
+      y: (touch.clientY - rect.top) * scaleY
+    };
+  };
+
+  const BRUSH_WIDTH = Math.max((canvasRef.current?.width || 1920) / 80, 8);
+
+  // 드로잉 핸들러
+  const startDraw = (e) => {
+    e.preventDefault();
+    isDrawing.current = true;
+    lastPos.current = getPos(e);
+    currentStroke.current = [];
+  };
+
+  const draw = (e) => {
+    e.preventDefault();
+    if (!isDrawing.current || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    currentStroke.current.push({ ...lastPos.current });
+    ctx.beginPath();
+    ctx.strokeStyle = BRUSH_COLOR;
+    ctx.lineWidth = BRUSH_WIDTH;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.moveTo(lastPos.current.x, lastPos.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    lastPos.current = pos;
+  };
+
+  const endDraw = (e) => {
+    e.preventDefault();
+    if (isDrawing.current) {
+      strokesRef.current.push([...currentStroke.current, lastPos.current]);
+    }
+    isDrawing.current = false;
+    lastPos.current = null;
+  };
+
+  // ↩ 되돌리기
+  const handleUndo = useCallback(() => {
+    if (!strokesRef.current.length) return;
+    strokesRef.current.pop();
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     const img = new Image();
     img.onload = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
-      strokesRef.current.forEach(s => {
+      ctx.strokeStyle = BRUSH_COLOR;
+      ctx.lineWidth = BRUSH_WIDTH;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      strokesRef.current.forEach((stroke) => {
+        if (stroke.length < 2) return;
         ctx.beginPath();
-        ctx.strokeStyle = "#FF0000";
-        ctx.lineWidth = Math.max(canvas.width / 80, 8);
-        ctx.lineCap = "round";
-        ctx.moveTo(s[0].x, s[0].y);
-        s.forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.moveTo(stroke[0].x, stroke[0].y);
+        stroke.forEach((p) => ctx.lineTo(p.x, p.y));
         ctx.stroke();
       });
     };
     img.src = imageDataUrl;
-  }, [imageDataUrl, canvasRef]);
+  }, [imageDataUrl, BRUSH_WIDTH]);
 
-  const getPos = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const touch = e.touches ? e.touches[0] : e;
-    return {
-      x: (touch.clientX - rect.left) * (canvasRef.current.width / rect.width),
-      y: (touch.clientY - rect.top)  * (canvasRef.current.height / rect.height)
+  // 🗑 전체 삭제
+  const handleClear = useCallback(() => {
+    strokesRef.current = [];
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
     };
-  };
-
-  const onStart = (e) => { e.preventDefault(); isDrawing.current = true; currentRef.current = [getPos(e)]; };
-  const onMove = (e) => {
-    e.preventDefault();
-    if (!isDrawing.current) return;
-    const pos = getPos(e);
-    const ctx = canvasRef.current.getContext("2d");
-    const prev = currentRef.current[currentRef.current.length - 1];
-    ctx.beginPath();
-    ctx.strokeStyle = "#FF0000";
-    ctx.lineWidth = Math.max(canvasRef.current.width / 80, 8);
-    ctx.lineCap = "round";
-    ctx.moveTo(prev.x, prev.y);
-    ctx.lineTo(pos.x, pos.y);
-    ctx.stroke();
-    currentRef.current.push(pos);
-  };
-  const onEnd = () => { if (isDrawing.current) { strokesRef.current.push(currentRef.current); isDrawing.current = false; } };
-
-  return { onStart, onMove, onEnd, undo: () => { strokesRef.current.pop(); redraw(); }, clear: () => { strokesRef.current = []; redraw(); } };
-}
-
-// ━━━ 메인 컴포넌트 ━━━
-export default function EditScreen({ imageDataUrl, onRetake }) {
-  const canvasRef = useRef(null);
-  const [msg, setMsg] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  const { transcript, setTranscript, isRecording, isSpeechSupported, toggleRecording } = useSpeechRecognition();
-  const { onStart, onMove, onEnd, undo, clear } = useCanvasDrawing(imageDataUrl, canvasRef);
-
-  const getUrl = () => canvasRef.current ? buildComposite(canvasRef.current, transcript).toDataURL("image/jpeg", 0.92) : null;
+    img.src = imageDataUrl;
+  }, [imageDataUrl]);
 
   const handleSave = () => {
-    const url = getUrl();
-    if (!url) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const combined = buildComposite(canvas, transcript);
+    const url = combined.toDataURL("image/jpeg", 0.92);
     const a = document.createElement("a");
     a.href = url;
     a.download = makeFilename();
     a.click();
-    setMsg({ ok: true, text: "📁 저장 완료!" });
+    setStatusMsg("📁 저장 완료!");
   };
 
   const handleShare = useCallback(async () => {
-    if (busy) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
+    if (busy || !canvasRef.current) return;
     setBusy(true);
-    const compositeCanvas = buildComposite(canvas, transcript);
+    const compositeCanvas = buildComposite(canvasRef.current, transcript);
     const fileName = makeFilename();
 
     compositeCanvas.toBlob(async (blob) => {
-      if (!blob) {
-        setBusy(false);
-        return;
-      }
+      if (!blob) { setBusy(false); return; }
 
-      // 1단계: 파일 공유 시도 (navigator.share)
       if (navigator.share && navigator.canShare) {
         const file = new File([blob], fileName, { type: "image/jpeg" });
         if (navigator.canShare({ files: [file] })) {
@@ -265,19 +271,15 @@ export default function EditScreen({ imageDataUrl, onRetake }) {
               text: transcript.trim() || "현장 사진 공유",
               files: [file],
             });
-            setMsg({ ok: true, text: "📤 공유 완료됐심더!" });
+            setStatusMsg("📤 공유 완료됐심더!");
             setBusy(false);
             return;
           } catch (err) {
-            if (err.name === "AbortError") {
-              setBusy(false);
-              return;
-            }
+            if (err.name === "AbortError") { setBusy(false); return; }
           }
         }
       }
 
-      // 2단계: 파일 공유 안 되면 → 자동 다운로드로 fallback (이동 중이거나 삼성 브라우저 등)
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -286,26 +288,67 @@ export default function EditScreen({ imageDataUrl, onRetake }) {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      setMsg({ ok: true, text: "📥 공유 미지원 → 자동 저장됐심더!" });
+      setStatusMsg("📥 공유 미지원 → 자동 저장됐심더!");
       setBusy(false);
     }, "image/jpeg", 0.92);
   }, [busy, transcript]);
 
   return (
     <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
-      {/* 툴바 */}
-      <div className="flex items-center justify-between px-3 py-2 bg-black/90 min-h-[54px]">
-        <button onClick={onRetake} className="px-4 py-2 bg-white/10 text-[#FEE12B] font-bold rounded-xl">← 다시</button>
-        <div className="flex gap-2">
-          <button onClick={undo} className="w-11 h-11 bg-white/10 rounded-xl flex items-center justify-center"><UndoIcon /></button>
-          <button onClick={clear} className="w-11 h-11 bg-white/10 rounded-xl flex items-center justify-center"><TrashIcon /></button>
-        </div>
+      
+      {/* ── 상단 헤더 ── */}
+      <div className="flex items-center px-4 py-3 bg-black border-b border-neutral-800 shrink-0">
+        <button
+          onTouchStart={(e) => { e.preventDefault(); onBack(); }}
+          onClick={onBack}
+          className="bg-neutral-800 text-yellow-300 text-base font-extrabold px-4 h-12 rounded-xl mr-3 flex items-center gap-1 active:scale-95 transition-transform"
+        >
+          ← 다시
+        </button>
+
+        <span className="text-yellow-300 text-lg font-bold tracking-wide flex-1">
+          찍고 긋고 말하기
+        </span>
+
+        {statusMsg && (
+          <span className="text-sm text-yellow-200 bg-neutral-800 px-3 py-1 rounded-full animate-pulse mr-2">
+            {statusMsg}
+          </span>
+        )}
+
+        {/* ↩ 되돌리기 */}
+        <button
+          onTouchStart={(e) => { e.preventDefault(); handleUndo(); }}
+          onClick={handleUndo}
+          className="bg-neutral-800 text-yellow-300 text-xl font-bold w-12 h-12 rounded-xl flex items-center justify-center active:scale-95 transition-transform mr-2"
+          aria-label="되돌리기"
+        >
+          ↩
+        </button>
+
+        {/* 🗑 전체 마킹 삭제 */}
+        <button
+          onTouchStart={(e) => { e.preventDefault(); handleClear(); }}
+          onClick={handleClear}
+          className="bg-red-700 text-white text-xl w-12 h-12 rounded-xl flex items-center justify-center active:scale-95 transition-transform"
+          aria-label="마킹 전체 삭제"
+        >
+          🗑
+        </button>
       </div>
 
-      {/* 캔버스 */}
+      {/* 캔버스 영역 */}
       <div className="flex-1 relative flex items-center justify-center bg-black">
-        <canvas ref={canvasRef} className="max-w-full max-h-full object-contain touch-none" onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd} />
-        <div className="absolute top-3 px-3 py-1 bg-red-600/80 text-white text-xs font-bold rounded-full">문제 부위 마킹하이소</div>
+        <canvas
+          ref={canvasRef}
+          className="max-w-full max-h-full object-contain touch-none"
+          onTouchStart={startDraw}
+          onTouchMove={draw}
+          onTouchEnd={endDraw}
+        />
+        <div className="absolute top-3 px-3 py-1 bg-red-600/80 text-white text-xs font-bold rounded-full pointer-events-none">
+          문제 부위 마킹하이소
+        </div>
       </div>
 
       {/* STT 구역 */}
@@ -325,7 +368,7 @@ export default function EditScreen({ imageDataUrl, onRetake }) {
           {isSpeechSupported && (
             <button
               onClick={toggleRecording}
-              className={`absolute right-3 bottom-3 w-11 h-11 rounded-full flex items-center justify-center ${isRecording ? "bg-red-600 mic-blinking" : "bg-[#FEE12B]"}`}
+              className={`absolute right-3 bottom-3 w-12 h-12 rounded-full flex items-center justify-center ${isRecording ? "bg-red-600 mic-blinking" : "bg-[#FEE12B]"}`}
             >
               <MicIcon recording={isRecording} />
             </button>
@@ -333,15 +376,12 @@ export default function EditScreen({ imageDataUrl, onRetake }) {
         </div>
       </div>
 
-      {/* 결과 메시지 */}
-      {msg && <div className={`py-2 text-center font-bold text-white ${msg.ok ? "bg-green-600/90" : "bg-red-600/90"}`}>{msg.text}</div>}
-
       {/* 하단 버튼 */}
       <div className="flex px-4 py-4 pb-8 gap-3 bg-black/95 min-h-[100px]">
-        <button onClick={handleSave} className="flex-1 h-20 bg-[#FEE12B]/90 rounded-2xl flex flex-col items-center justify-center gap-1">
+        <button onClick={handleSave} className="flex-1 h-20 bg-[#FEE12B]/90 rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-transform">
           <SaveIcon /><span className="text-sm font-black text-black">보관함 저장</span>
         </button>
-        <button onClick={handleShare} disabled={busy} className="flex-1 h-20 bg-[#FEE12B] rounded-2xl flex flex-col items-center justify-center gap-1">
+        <button onClick={handleShare} disabled={busy} className="flex-1 h-20 bg-[#FEE12B] rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-transform">
           {busy ? <span className="text-black font-black animate-pulse">처리 중...</span> : <><ShareIcon /><span className="text-sm font-black text-black">즉시 공유</span></>}
         </button>
       </div>

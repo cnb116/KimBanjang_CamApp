@@ -52,7 +52,7 @@ export default function App() {
       {phase === "edit" && capturedImage && (
         <EditScreen
           imageDataUrl={capturedImage}
-          onRetake={handleRetake}
+          onBack={handleRetake}
         />
       )}
     </div>
