@@ -13,10 +13,12 @@ function MicIcon({ isRecording }) {
 }
 
 function SendIcon() {
+  // 공유 아이콘 (위로 올리는 화살표 — Share의 보편적 상징)
   return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" fill="#000" stroke="none" />
+    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="#000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+      <polyline points="16 6 12 2 8 6" />
+      <line x1="12" y1="2" x2="12" y2="15" />
     </svg>
   );
 }
@@ -423,12 +425,12 @@ export default function EditScreen({ imageDataUrl, onRetake, onSend, isSending, 
           aria-label="전송"
         >
           {isSending ? (
-            <span className="text-black font-black text-lg animate-pulse">전송 중...</span>
+            <span className="text-black font-black text-lg animate-pulse">처리 중...</span>
           ) : (
             <>
               <SendIcon />
               <span className="text-base font-black" style={{ color: "#000" }}>
-                전송
+                공유 / 저장
               </span>
             </>
           )}
