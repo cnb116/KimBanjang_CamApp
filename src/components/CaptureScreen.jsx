@@ -226,16 +226,29 @@ export default function CaptureScreen({ onCapture }) {
     setReady(false);
     setError(null);
     resetTorch();
+    // 1순위: 4:3 고화질 요청
+    const constraints1 = {
+      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      audio: false,
+    };
+    // 2순위 폴백: 해상도 제약 없이 facingMode만
+    const constraints2 = {
+      video: { facingMode: { ideal: facing } },
+      audio: false,
+    };
+    let stream = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: facing },
-          width:  { ideal: 1920 },
-          height: { ideal: 1440 },  // 4:3 센서 원본 비율
-          aspectRatio: { ideal: 4 / 3 },
-        },
-        audio: false,
-      });
+      stream = await navigator.mediaDevices.getUserMedia(constraints1);
+    } catch {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints2);
+      } catch (err2) {
+        setError("카메라 권한이 필요합니더. 브라우저 설정을 확인하이소.");
+        console.error("카메라 오류:", err2);
+        return;
+      }
+    }
+    try {
       streamRef.current = stream;
       detectZoomCapability(stream);
       detectTorchCapability(stream);
@@ -245,8 +258,8 @@ export default function CaptureScreen({ onCapture }) {
         setReady(true);
       }
     } catch (err) {
-      setError("카메라 권한이 필요합니더. 브라우저 설정을 확인하이소.");
-      console.error("카메라 오류:", err);
+      setError("카메라 스트림 연결 실패.");
+      console.error("스트림 오류:", err);
     }
   }, [detectZoomCapability, detectTorchCapability, resetTorch]);
 
@@ -285,10 +298,7 @@ export default function CaptureScreen({ onCapture }) {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, OUT_W, OUT_H);
     // ── 4:3 크롭 로직 끝 ──
-
-    // [신규 용접] 워터마크 각인 — 크롭 직후 캔버스 위에 덮어쓰기
-    stampWatermark(ctx, OUT_W, OUT_H, locationTextRef.current);
-
+    // ⚠️ 워터마크는 EditScreen에서 전송 시점에 합성 — 여기서 찍지 않음
     const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
     onCapture(dataUrl);
   }, [ready, onCapture, locationTextRef]);
