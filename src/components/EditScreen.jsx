@@ -240,27 +240,56 @@ export default function EditScreen({ imageDataUrl, onRetake }) {
     setMsg({ ok: true, text: "📁 저장 완료!" });
   };
 
-  const handleShare = async () => {
+  const handleShare = useCallback(async () => {
     if (busy) return;
-    const url = getUrl();
-    if (!url) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
     setBusy(true);
-    try {
-      const resp = await fetch(url);
-      const blob = await resp.blob();
-      const file = new File([blob], makeFilename(), { type: "image/jpeg" });
-      if (navigator.share && navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: "현장 보고" });
-        setMsg({ ok: true, text: "✅ 공유 완료!" });
-      } else {
-        handleSave();
+    const compositeCanvas = buildComposite(canvas, transcript);
+    const fileName = makeFilename();
+
+    compositeCanvas.toBlob(async (blob) => {
+      if (!blob) {
+        setBusy(false);
+        return;
       }
-    } catch {
-      setMsg({ ok: false, text: "❌ 실패" });
-    } finally {
+
+      // 1단계: 파일 공유 시도 (navigator.share)
+      if (navigator.share && navigator.canShare) {
+        const file = new File([blob], fileName, { type: "image/jpeg" });
+        if (navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({
+              title: "현장 사진",
+              text: transcript.trim() || "현장 사진 공유",
+              files: [file],
+            });
+            setMsg({ ok: true, text: "📤 공유 완료됐심더!" });
+            setBusy(false);
+            return;
+          } catch (err) {
+            if (err.name === "AbortError") {
+              setBusy(false);
+              return;
+            }
+          }
+        }
+      }
+
+      // 2단계: 파일 공유 안 되면 → 자동 다운로드로 fallback (이동 중이거나 삼성 브라우저 등)
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMsg({ ok: true, text: "📥 공유 미지원 → 자동 저장됐심더!" });
       setBusy(false);
-    }
-  };
+    }, "image/jpeg", 0.92);
+  }, [busy, transcript]);
 
   return (
     <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
