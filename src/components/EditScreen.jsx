@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 
-// ━━━ 점멸 애니메이션 CSS ━━━
+// ━━━ 점멸 애니메이션 + 토글 스위치 CSS ━━━
 if (typeof document !== "undefined" && !document.getElementById("mic-blink-style")) {
   const el = document.createElement("style");
   el.id = "mic-blink-style";
@@ -10,6 +10,30 @@ if (typeof document !== "undefined" && !document.getElementById("mic-blink-style
       50%       { opacity: 0.5; box-shadow: 0 0 0 10px rgba(255,59,59,0); }
     }
     .mic-blinking { animation: micBlink 0.85s ease-in-out infinite; }
+
+    /* ── 토글 스위치 ── */
+    .wm-toggle-wrap { display: flex; align-items: center; gap: 6px; }
+    .wm-toggle-label { font-size: 12px; font-weight: 700; color: #FEE12B; user-select: none; cursor: pointer; }
+    .wm-toggle {
+      position: relative; display: inline-block;
+      width: 42px; height: 24px; flex-shrink: 0;
+    }
+    .wm-toggle input { opacity: 0; width: 0; height: 0; }
+    .wm-toggle-slider {
+      position: absolute; inset: 0;
+      background: #444; border-radius: 24px;
+      transition: background 0.25s;
+      cursor: pointer;
+    }
+    .wm-toggle-slider::before {
+      content: '';
+      position: absolute; left: 3px; top: 3px;
+      width: 18px; height: 18px;
+      border-radius: 50%; background: #fff;
+      transition: transform 0.25s;
+    }
+    .wm-toggle input:checked + .wm-toggle-slider { background: #FEE12B; }
+    .wm-toggle input:checked + .wm-toggle-slider::before { transform: translateX(18px); }
   `;
   document.head.appendChild(el);
 }
@@ -51,7 +75,8 @@ function ShareIcon() {
 }
 
 // ━━━ 워터마크 합성 헬퍼 ━━━
-function buildComposite(srcCanvas, text) {
+// showDateTime: 날짜/시간 표시 여부, showSpeech: 음성 텍스트 표시 여부
+function buildComposite(srcCanvas, text, showDateTime = true, showSpeech = true) {
   const off = document.createElement("canvas");
   off.width  = srcCanvas.width;
   off.height = srcCanvas.height;
@@ -59,12 +84,20 @@ function buildComposite(srcCanvas, text) {
 
   ctx.drawImage(srcCanvas, 0, 0);
 
+  // 표시할 항목이 하나도 없으면 워터마크 생략
+  if (!showDateTime && !showSpeech) return off;
+
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  const hasText = text.trim() !== "";
-  const label = hasText ? `${dateStr}  |  ${text.trim()}` : dateStr;
+  const hasText = showSpeech && text.trim() !== "";
+
+  let label = "";
+  if (showDateTime && hasText)  label = `${dateStr}  |  ${text.trim()}`;
+  else if (showDateTime)        label = dateStr;
+  else if (hasText)             label = text.trim();
+  else return off; // 토글이 켜져 있어도 내용이 없으면 생략
 
   const fontSize = Math.max(Math.round(off.width * 0.030), 28);
   ctx.font = `bold ${fontSize}px 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif`;
@@ -74,10 +107,18 @@ function buildComposite(srcCanvas, text) {
   const boxH = fontSize + padY * 2;
   const boxY = off.height - boxH;
 
-  ctx.fillStyle = "rgba(254, 225, 43, 0.85)";
+  // ① 배경: 노란색 15% 투명 (배경 사진이 잘 비치도록)
+  ctx.fillStyle = "rgba(255, 235, 59, 0.15)";
   ctx.fillRect(0, boxY, off.width, boxH);
 
   const padX = Math.round(off.width * 0.022);
+
+  // ② 텍스트: 흰색 외곽선(stroke) + 검은 글씨(fill) 순으로 가독성 확보
+  ctx.lineWidth = Math.max(Math.round(fontSize * 0.07), 2);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.90)";
+  ctx.lineJoin = "round";
+  ctx.strokeText(label, padX, boxY + boxH / 2);
+
   ctx.fillStyle = "rgba(0, 0, 0, 0.95)";
   ctx.fillText(label, padX, boxY + boxH / 2);
 
@@ -130,6 +171,10 @@ export default function EditScreen({ imageDataUrl, onBack }) {
   const canvasRef = useRef(null);
   const [statusMsg, setStatusMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // ── 워터마크 표시 항목 토글 (기본값: 둘 다 켜짐) ──
+  const [showDateTime, setShowDateTime] = useState(true);
+  const [showSpeech,   setShowSpeech]   = useState(true);
 
   // 드로잉 관련 상태
   const isDrawing = useRef(false);
@@ -244,7 +289,7 @@ export default function EditScreen({ imageDataUrl, onBack }) {
   const handleSave = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const combined = buildComposite(canvas, transcript);
+    const combined = buildComposite(canvas, transcript, showDateTime, showSpeech);
     const url = combined.toDataURL("image/jpeg", 0.92);
     const a = document.createElement("a");
     a.href = url;
@@ -256,7 +301,7 @@ export default function EditScreen({ imageDataUrl, onBack }) {
   const handleShare = useCallback(async () => {
     if (busy || !canvasRef.current) return;
     setBusy(true);
-    const compositeCanvas = buildComposite(canvasRef.current, transcript);
+    const compositeCanvas = buildComposite(canvasRef.current, transcript, showDateTime, showSpeech);
     const fileName = makeFilename();
 
     compositeCanvas.toBlob(async (blob) => {
@@ -291,7 +336,7 @@ export default function EditScreen({ imageDataUrl, onBack }) {
       setStatusMsg("📥 공유 미지원 → 자동 저장됐심더!");
       setBusy(false);
     }, "image/jpeg", 0.92);
-  }, [busy, transcript]);
+  }, [busy, transcript, showDateTime, showSpeech]);
 
   return (
     <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
@@ -353,6 +398,32 @@ export default function EditScreen({ imageDataUrl, onBack }) {
 
       {/* STT 구역 */}
       <div className="bg-black/95 border-t border-[#FEE12B]/30">
+        {/* ── 워터마크 표시 항목 토글 ── */}
+        <div className="flex items-center gap-4 px-4 pt-2 pb-1">
+          <label className="wm-toggle-wrap">
+            <span className="wm-toggle-label">날짜/시간</span>
+            <span className="wm-toggle">
+              <input
+                type="checkbox"
+                checked={showDateTime}
+                onChange={e => setShowDateTime(e.target.checked)}
+              />
+              <span className="wm-toggle-slider" />
+            </span>
+          </label>
+          <label className="wm-toggle-wrap">
+            <span className="wm-toggle-label">음성 텍스트</span>
+            <span className="wm-toggle">
+              <input
+                type="checkbox"
+                checked={showSpeech}
+                onChange={e => setShowSpeech(e.target.checked)}
+              />
+              <span className="wm-toggle-slider" />
+            </span>
+          </label>
+        </div>
+
         <div className="flex items-center gap-2 px-4 py-2 text-[#FEE12B] text-xs font-black">
           {isRecording && <span className="text-red-500 animate-pulse">●</span>}
           {isRecording ? "듣고 있심더..." : "음성 메모 (수정 가능)"}
